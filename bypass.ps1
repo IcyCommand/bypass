@@ -1,7 +1,5 @@
 $HardwareBreakpoint = @"
-// Technique from @_EthicalChaos_ (https://twitter.com/_EthicalChaos_)
-// Original Code by @d_tranman: https://twitter.com/d_tranman/status/1628954053115002881
-// Slight modifications by @ShitSecure for Powershell runtime compitability as the original code could not be used like this. Also the removal of the Hardware breakpoint was removed, so that every following future Powershell command bypasses AMSI as well.
+
 
 using System;
 using System.Collections.Generic;

